@@ -6,7 +6,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+      - run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -y
       - working-directory: ./sxg-rs/
         run: cargo test
 
