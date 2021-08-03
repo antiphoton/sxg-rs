@@ -12,6 +12,6 @@ jobs:
       - working-directory: ./cloudflare_worker/worker/
         run: |
           npm install
-          npm build
+          npm run build
           npm run test
 
