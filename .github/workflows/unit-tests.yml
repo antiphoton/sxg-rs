@@ -1,11 +1,9 @@
 name: Unit tests
 on:
   push:
-    branches:
-      - main
+    branches: [ $default-branch ]
   pull_request:
-    branches:
-      - main
+    branches: [ $default-branch ]
 jobs:
   Rust:
     runs-on: ubuntu-latest
