@@ -22,9 +22,7 @@ use std::collections::BTreeSet;
 pub struct ConfigInput {
     pub cert_url_dirname: String,
     pub forward_request_headers: BTreeSet<String>,
-    // This field is only needed by Fastly, because Cloudflare uses [vars]
-    // to set this where the TypeScript wrapper can read it.
-    pub html_host: Option<String>,
+    pub html_host: String,
     // This field is only needed by Fastly, because Cloudflare uses secret
     // env variables to store private key.
     // TODO: check if Fastly edge dictionary is ok to store private key.

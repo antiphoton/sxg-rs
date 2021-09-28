@@ -490,6 +490,7 @@ dependencies = [
  "textwrap 0.11.0",
  "unicode-width",
  "vec_map",
+ "yaml-rust 0.3.5",
 ]
 
 [[package]]
@@ -614,7 +615,7 @@ dependencies = [
  "serde-hjson",
  "serde_json",
  "toml",
- "yaml-rust",
+ "yaml-rust 0.4.5",
 ]
 
 [[package]]
@@ -622,10 +623,13 @@ name = "config-generator"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.13.0",
+ "clap 2.33.3",
  "cloudflare",
  "console 0.15.0",
  "ctrlc",
  "dialoguer",
+ "once_cell",
  "pem",
  "serde 1.0.130",
  "serde_json",
@@ -3101,7 +3105,7 @@ dependencies = [
  "dtoa",
  "indexmap",
  "serde 1.0.130",
- "yaml-rust",
+ "yaml-rust 0.4.5",
 ]
 
 [[package]]
@@ -4234,6 +4238,12 @@ name = "xml-rs"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2d7d3948613f75c98fd9328cfdcc45acc4d360655289d0a7d4ec931392200a3"
+
+[[package]]
+name = "yaml-rust"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e66366e18dc58b46801afbf2ca7661a9f59cc8c5962c29892b6039b4f86fa992"
 
 [[package]]
 name = "yaml-rust"
