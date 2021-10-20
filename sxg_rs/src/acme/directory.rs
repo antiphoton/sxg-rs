@@ -91,6 +91,31 @@ pub struct Order {
     pub certificate: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Authorization {
+    pub status: Status,
+    pub expires: DateTime<FixedOffset>,
+    pub challenges: Vec<Challenge>,
+}
+
+// https://datatracker.ietf.org/doc/html/rfc8555#section-8.3
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Challenge {
+    pub r#type: String,
+    pub token: String,
+    pub url: String,
+    pub status: Status,
+}
+
+// https://datatracker.ietf.org/doc/html/rfc8555#:~:text=it%20should%20send%20a%20POST%20request%20to%20the%20order%20resource%27s%20finalize%20URL
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinalizeRequest<'a> {
+    pub csr: &'a str,
+}
+
 // https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.6
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

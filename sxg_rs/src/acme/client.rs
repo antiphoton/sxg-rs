@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::directory::{
-    Directory, Identifier, IdentifierType, NewAccountRequestPayload, NewAccountResponsePayload,
-    NewOrderRequestPayload, Order, Status,
+    Authorization, Challenge, Directory, FinalizeRequest, Identifier, IdentifierType,
+    NewAccountRequestPayload, NewAccountResponsePayload, NewOrderRequestPayload, Order, Status,
 };
 use super::jose::EcPublicKey;
 use crate::fetcher::Fetcher;
@@ -22,6 +22,8 @@ use crate::http::{HttpRequest, HttpResponse, Method};
 use crate::signature::Signer;
 use anyhow::{anyhow, Error, Result};
 use serde::Serialize;
+use std::sync::Arc;
+use warp::Filter;
 
 pub struct Client {
     public_key: EcPublicKey,
@@ -61,7 +63,7 @@ impl Client {
             terms_of_service_agreed: true, // DO NOT SUBMIT
         };
         let response = self
-            .post_request(
+            .post_with_payload(
                 AuthMethod::JsonWebKey,
                 self.directory.new_account.clone(),
                 req_payload,
@@ -82,6 +84,7 @@ impl Client {
         &mut self,
         account_url: &str,
         domain: String,
+        csr_der: &[u8],
         fetcher: &F,
         signer: &S,
     ) -> Result<()> {
@@ -93,8 +96,8 @@ impl Client {
             not_before: None,
             not_after: None,
         };
-        let response = self
-            .post_request(
+        let order = self
+            .post_with_payload(
                 AuthMethod::KeyId(account_url),
                 self.directory.new_order.clone(),
                 req_payload,
@@ -102,19 +105,107 @@ impl Client {
                 signer,
             )
             .await?;
-        let order: Order = serde_json::from_slice(&response.body)
+        let order: Order = serde_json::from_slice(&order.body)
             .map_err(|e| Error::new(e).context("Failed to parse new order response"))?;
-        dbg!(order);
+        let authorization_url = order
+            .authorizations
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::msg("The order response does not contain authorizations"))?;
+        let authorization = self
+            .post_as_get(
+                AuthMethod::KeyId(account_url),
+                authorization_url,
+                fetcher,
+                signer,
+            )
+            .await?;
+        let authorization: Authorization = serde_json::from_slice(&authorization.body)
+            .map_err(|e| Error::new(e).context("Failed to parse authorization response"))?;
+        let challenge = authorization
+            .challenges
+            .into_iter()
+            .find_map(|challenge| {
+                if challenge.r#type == "http-01" {
+                    Some(challenge)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Error::msg("The authorization does not have http-01 type challenge"))?;
+        // https://datatracker.ietf.org/doc/html/rfc8555#section-8.1
+        let challenge_answer = Arc::new(format!(
+            "{}.{}",
+            challenge.token,
+            base64::encode_config(self.public_key.get_thumbprint(), base64::URL_SAFE_NO_PAD)
+        ));
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let routes = warp::path!(".well-known" / "acme-challenge" / String)
+            .map(move |name| format!("{}", challenge_answer));
+        let (_addr, server) =
+            warp::serve(routes).bind_with_graceful_shutdown(([127, 0, 0, 1], 8002), async {
+                rx.await.ok();
+            });
+        tokio::spawn(server);
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        // https://datatracker.ietf.org/doc/html/rfc8555#section-7.5.1
+        // The client indicates to the server that it is ready for the challenge
+        // validation by sending an empty JSON body ("{}") carried in a POST
+        // request to the challenge URL (not the authorization URL).
+        self.post_with_payload(
+            AuthMethod::KeyId(account_url),
+            challenge.url.clone(),
+            serde_json::Map::new(),
+            fetcher,
+            signer,
+        )
+        .await?;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let _ = tx.send(());
+        let asdf = self
+            .post_with_payload(
+                AuthMethod::KeyId(account_url),
+                order.finalize.clone(),
+                FinalizeRequest {
+                    csr: &base64::encode_config(csr_der, base64::URL_SAFE_NO_PAD),
+                },
+                fetcher,
+                signer,
+            )
+            .await?;
+
         Ok(())
     }
 }
 
 impl Client {
-    async fn post_request<F: Fetcher, S: Signer, P: Serialize>(
+    async fn post_as_get<F: Fetcher, S: Signer>(
+        &mut self,
+        auth_method: AuthMethod<'_>,
+        url: String,
+        fetcher: &F,
+        signer: &S,
+    ) -> Result<HttpResponse> {
+        let payload: Option<()> = None;
+        self.post_impl(auth_method, url, payload, fetcher, signer)
+            .await
+    }
+    async fn post_with_payload<F: Fetcher, S: Signer, P: Serialize>(
         &mut self,
         auth_method: AuthMethod<'_>,
         url: String,
         payload: P,
+        fetcher: &F,
+        signer: &S,
+    ) -> Result<HttpResponse> {
+        self.post_impl(auth_method, url, Some(payload), fetcher, signer)
+            .await
+    }
+    async fn post_impl<F: Fetcher, S: Signer, P: Serialize>(
+        &mut self,
+        auth_method: AuthMethod<'_>,
+        url: String,
+        payload: Option<P>,
         fetcher: &F,
         signer: &S,
     ) -> Result<HttpResponse> {

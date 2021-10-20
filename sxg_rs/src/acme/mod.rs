@@ -14,6 +14,8 @@
 
 //! ACME(Automatic Certificate Management Environment) is defined in [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555).
 
+#[cfg(target_family = "unix")]
+pub mod cli;
 mod client;
 mod directory;
 mod jose;
@@ -23,10 +25,12 @@ use crate::signature::Signer;
 use anyhow::Result;
 use client::Client;
 
+// https://datatracker.ietf.org/doc/html/rfc8555#:~:text=The%20following%20table%20illustrates%20a%20typical%20sequence
 pub async fn get_cert<F: Fetcher, S: Signer>(
     directory_url: &str,
     public_key_x: Vec<u8>,
     public_key_y: Vec<u8>,
+    csr_der: &[u8],
     fetcher: &F,
     signer: &S,
 ) -> Result<()> {
@@ -35,32 +39,15 @@ pub async fn get_cert<F: Fetcher, S: Signer>(
         .get_account_url("caoboxiao@google.com", fetcher, signer)
         .await?;
     client
-        .apply_certificate(&account_url, "caoboxiao.com".to_string(), fetcher, signer)
+        .apply_certificate(
+            &account_url,
+            "caoboxiao.com".to_string(),
+            csr_der,
+            fetcher,
+            signer,
+        )
         .await?;
     Ok(())
 }
 
 pub const LETSENCRYPT_STAGING: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
-
-#[cfg(test)]
-mod tests {
-    use once_cell::sync::Lazy;
-    static X: Lazy<Vec<u8>> =
-        Lazy::new(|| base64::decode("bvhfVoqrJ8FomDZa9MhfTY4NSP13FtpcjOvmX+mA47c=").unwrap());
-    static Y: Lazy<Vec<u8>> =
-        Lazy::new(|| base64::decode("tZ+8QKYXIfnl7j9pMylyhCNKiT2p6yFnoVts28bxEVo=").unwrap());
-    static D: Lazy<Vec<u8>> =
-        Lazy::new(|| base64::decode("A+qJRPq/kvk+L9ijVFCHw3hMBQ6lc8JjF7lkTp+ndGQ=").unwrap());
-    #[test]
-    fn sxg_rs() {
-        use super::*;
-        tokio_test::block_on(async {
-            let fetcher = crate::fetcher::hyper_fetcher::HyperFetcher::new();
-            let signer = crate::signature::rust_signer::RustSigner::new(&D).unwrap();
-            get_cert(LETSENCRYPT_STAGING, X.clone(), Y.clone(), &fetcher, &signer)
-                .await
-                .unwrap();
-            panic!();
-        });
-    }
-}

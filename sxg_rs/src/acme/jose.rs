@@ -23,7 +23,7 @@ pub async fn create_request_body<S: Signer, P: Serialize>(
     kid: Option<&str>,
     nonce: String,
     url: &str,
-    payload: P,
+    payload: Option<P>,
     signer: &S,
 ) -> Result<Vec<u8>> {
     let protected_header = ProtectedHeader {
@@ -33,39 +33,8 @@ pub async fn create_request_body<S: Signer, P: Serialize>(
         jwk,
         kid,
     };
-    if 2 > 1 {
-        let jws = JsonWebSignature::new(protected_header, payload, signer).await?;
-        dbg!(111);
-        serde_json::to_vec(&jws).map_err(|e| Error::new(e).context("Failed to serialize JWS"))
-    } else {
-        unreachable!();
-        // let protected_header = base64::encode_config(
-        //     serde_json::to_string(&protected_header)
-        //         .map_err(|e| Error::new(e).context("Failed to serialize protected header."))?,
-        //     base64::URL_SAFE_NO_PAD,
-        // );
-        // let payload = serde_json::to_string(&payload)
-        //     .map_err(|e| Error::new(e).context("Failed to serialize payload."))?;
-        // let payload = base64::encode_config(&payload, base64::URL_SAFE_NO_PAD);
-        // // https://datatracker.ietf.org/doc/html/rfc7515#:~:text=The%20input%20to%20the%20digital%20signature
-        // let message = format!("{}.{}", protected_header, payload);
-        // let signature = signer
-        //     .sign(message.as_bytes())
-        //     .await
-        //     .map_err(|e| e.context("Failed to create signature"))?;
-        // // https://datatracker.ietf.org/doc/html/rfc8555#section-6.2
-        // let jws: BTreeMap<_, _> = vec![
-        //     ("protected", protected_header),
-        //     ("payload", payload),
-        //     (
-        //         "signature",
-        //         base64::encode_config(signature, base64::URL_SAFE_NO_PAD),
-        //     ),
-        // ]
-        // .into_iter()
-        // .collect();
-        // serde_json::to_vec(&jws).map_err(|e| Error::new(e).context("Failed to serialize JWS"))
-    }
+    let jws = JsonWebSignature::new(protected_header, payload, signer).await?;
+    serde_json::to_vec(&jws).map_err(|e| Error::new(e).context("Failed to serialize JWS"))
 }
 
 #[derive(Serialize)]
@@ -80,12 +49,20 @@ struct ProtectedHeader<'a> {
 
 #[derive(Serialize, Deserialize)]
 pub struct EcPublicKey {
-    kty: String,
     crv: String,
+    kty: String,
     #[serde(with = "crate::serde_helpers::base64")]
     x: Vec<u8>,
     #[serde(with = "crate::serde_helpers::base64")]
     y: Vec<u8>,
+}
+
+impl EcPublicKey {
+    // https://datatracker.ietf.org/doc/html/rfc7638#section-3
+    pub fn get_thumbprint(&self) -> Vec<u8> {
+        let message = serde_json::to_string(&self).unwrap();
+        crate::utils::get_sha(message.as_bytes())
+    }
 }
 
 impl EcPublicKey {
@@ -109,13 +86,17 @@ struct JsonWebSignature {
 impl JsonWebSignature {
     async fn new<H: Serialize, P: Serialize, S: Signer>(
         protected_header: H,
-        payload: P,
+        payload: Option<P>,
         signer: &S,
     ) -> Result<Self> {
         let protected_header = serde_json::to_string(&protected_header)
             .map_err(|e| Error::new(e).context("Failed to serialize protected header."))?;
-        let payload = serde_json::to_string(&payload)
-            .map_err(|e| Error::new(e).context("Failed to serialize payload."))?;
+        let payload = if let Some(payload) = payload {
+            serde_json::to_string(&payload)
+                .map_err(|e| Error::new(e).context("Failed to serialize payload."))?
+        } else {
+            "".to_string()
+        };
         Self::new_from_serialized(&protected_header, &payload, signer).await
     }
     async fn new_from_serialized<S: Signer>(
@@ -143,10 +124,10 @@ impl JsonWebSignature {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The example given in RFC 7515
+    // https://datatracker.ietf.org/doc/html/rfc7515#appendix-A.3.1
     #[async_std::test]
     async fn json_web_signature() {
-        // This test follow the example given in RFC 7515.
-        // https://datatracker.ietf.org/doc/html/rfc7515#appendix-A.3.1
         let protected_header = "{\"alg\":\"ES256\"}";
         let payload =
             "{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true}";
@@ -168,6 +149,16 @@ mod tests {
         // assert_eq!(jws.signature, "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSA\
         // pmWQxfKTUJqPP3-Kg6NU1Q");
     }
+    // According to https://datatracker.ietf.org/doc/html/rfc7638#section-3,
+    // to generate valid thumbprint, the seralization of JWK must be
+    //   1. containing no whitespace or line breaks
+    //   2. with the required members ordered lexicographically
+    #[test]
+    fn jwk_serialization() {
+        let k = EcPublicKey::new("", vec![], vec![]);
+        assert_eq!(
+            serde_json::to_string(&k).unwrap(),
+            r#"{"crv":"","kty":"EC","x":"","y":""}"#
+        );
+    }
 }
-
-// TODO: Add a test by
