@@ -4033,6 +4033,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sxg_rs",
+ "tokio",
  "toml",
  "url",
  "wrangler",

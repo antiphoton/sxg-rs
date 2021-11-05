@@ -156,4 +156,21 @@ SFfkmh8Fc2QXpbbaK5AQfnQpkDHV
             }
         }
     }
+    // // According to https://datatracker.ietf.org/doc/html/rfc7638#section-3,
+    // // to generate valid thumbprint, the seralization of JWK must be
+    // //   1. containing no whitespace or line breaks
+    // //   2. with the required members ordered lexicographically
+    // #[test]
+    // fn jwk_serialization() {
+    //     let k = EcPublicKey {
+    //         kty: "EC".to_string(),
+    //         crv: "".to_string(),
+    //         x: vec![],
+    //         y: vec![],
+    //     };
+    //     assert_eq!(
+    //         serde_json::to_string(&k).unwrap(),
+    //         r#"{"crv":"","kty":"EC","x":"","y":""}"#
+    //     );
+    // }
 }
