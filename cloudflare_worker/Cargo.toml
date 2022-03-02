@@ -30,5 +30,5 @@ wasm-bindgen = "0.2.79"
 opt-level = 3
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = true
+wasm-opt = false
 
