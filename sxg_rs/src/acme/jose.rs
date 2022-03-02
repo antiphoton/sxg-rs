@@ -14,9 +14,10 @@
 
 // https://datatracker.ietf.org/doc/html/rfc7515
 
+use crate::crypto::EcPublicKey;
 use crate::signature::Signer;
 use anyhow::{Error, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Serialize};
 
 pub async fn create_request_body<S: Signer, P: Serialize>(
     jwk: Option<&EcPublicKey>,
@@ -76,27 +77,6 @@ struct ProtectedHeader<'a> {
     url: &'a str,
     jwk: Option<&'a EcPublicKey>,
     kid: Option<&'a str>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct EcPublicKey {
-    kty: String,
-    crv: String,
-    #[serde(with = "crate::serde_helpers::base64")]
-    x: Vec<u8>,
-    #[serde(with = "crate::serde_helpers::base64")]
-    y: Vec<u8>,
-}
-
-impl EcPublicKey {
-    pub fn new(crv: &'static str, x: Vec<u8>, y: Vec<u8>) -> Self {
-        EcPublicKey {
-            kty: "EC".to_string(),
-            crv: crv.to_string(),
-            x,
-            y,
-        }
-    }
 }
 
 #[derive(Debug, Serialize)]

@@ -16,7 +16,7 @@ use super::directory::{
     Directory, Identifier, IdentifierType, NewAccountRequestPayload, NewAccountResponsePayload,
     NewOrderRequestPayload, Order, Status,
 };
-use super::jose::EcPublicKey;
+use crate::crypto::EcPublicKey;
 use crate::fetcher::Fetcher;
 use crate::http::{HttpRequest, HttpResponse, Method};
 use crate::signature::Signer;
@@ -38,12 +38,10 @@ enum AuthMethod<'a> {
 impl Client {
     pub async fn new<F: Fetcher>(
         directory_url: &str,
-        public_key_x: Vec<u8>,
-        public_key_y: Vec<u8>,
+        public_key: EcPublicKey,
         fetcher: &F,
     ) -> Result<Self> {
         let directory = Directory::new(directory_url, fetcher).await?;
-        let public_key = EcPublicKey::new("P-256", public_key_x, public_key_y);
         Ok(Client {
             public_key,
             directory,

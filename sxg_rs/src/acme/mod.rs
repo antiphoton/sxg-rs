@@ -18,6 +18,7 @@ mod client;
 mod directory;
 mod jose;
 
+use crate::crypto::EcPublicKey;
 use crate::fetcher::Fetcher;
 use crate::signature::Signer;
 use anyhow::Result;
@@ -25,12 +26,11 @@ use client::Client;
 
 pub async fn get_cert<F: Fetcher, S: Signer>(
     directory_url: &str,
-    public_key_x: Vec<u8>,
-    public_key_y: Vec<u8>,
+    public_key: EcPublicKey,
     fetcher: &F,
     signer: &S,
 ) -> Result<()> {
-    let mut client = Client::new(directory_url, public_key_x, public_key_y, fetcher).await?;
+    let mut client = Client::new(directory_url, public_key, fetcher).await?;
     let account_url = client
         .get_account_url("foo@bar.com", fetcher, signer)
         .await?;
@@ -57,10 +57,16 @@ mod tests {
         tokio_test::block_on(async {
             let fetcher = crate::fetcher::hyper_fetcher::HyperFetcher::new();
             let signer = crate::signature::rust_signer::RustSigner::new(&D).unwrap();
-            get_cert(LETSENCRYPT_STAGING, X.clone(), Y.clone(), &fetcher, &signer)
+            let public_key = EcPublicKey {
+                kty: "EC".to_string(),
+                crv: "P-256".to_string(),
+                x: X.clone(),
+                y: Y.clone(),
+            };
+            get_cert(LETSENCRYPT_STAGING, public_key, &fetcher, &signer)
                 .await
                 .unwrap();
-            panic!();
+            // panic!();
         });
     }
 }
