@@ -33,7 +33,15 @@ use crate::fetcher::Fetcher;
 use crate::http::{HttpRequest, Method};
 use crate::utils::get_sha;
 
-fn create_ocsp_request(cert: &X509Certificate, issuer: &X509Certificate) -> Vec<u8> {
+pub struct RequestOptions {
+    pub use_sha1_in_cert_id: bool,
+}
+
+fn create_ocsp_request(
+    cert: &X509Certificate,
+    issuer: &X509Certificate,
+    options: RequestOptions,
+) -> Vec<u8> {
     let issuer_name = issuer.tbs_certificate.subject.as_raw();
     let issuer_key = issuer.tbs_certificate.subject_pki.subject_public_key.data;
     let issuer_key_hash = get_sha(issuer_key);
@@ -45,8 +53,13 @@ fn create_ocsp_request(cert: &X509Certificate, issuer: &X509Certificate) -> Vec<
     //     issuerNameHash      OCTET STRING, -- Hash of issuer's DN
     //     issuerKeyHash       OCTET STRING, -- Hash of issuer's public key
     //     serialNumber        CertificateSerialNumber }
+    let cert_id_hash_algorithm = if options.use_sha1_in_cert_id {
+        HashAlgorithm::Sha1
+    } else {
+        HashAlgorithm::Sha256
+    };
     let cert_id = BerObject::from_seq(vec![
-        signature_algorithm(),
+        cert_id_hash_algorithm.to_ber(),
         BerObject::from_obj(BerObjectContent::OctetString(&issuer_name_hash)),
         BerObject::from_obj(BerObjectContent::OctetString(&issuer_key_hash)),
         BerObject::from_obj(BerObjectContent::Integer(serial_number)),
@@ -71,21 +84,32 @@ fn create_ocsp_request(cert: &X509Certificate, issuer: &X509Certificate) -> Vec<
     ocsp_request.to_vec().unwrap()
 }
 
-// https://tools.ietf.org/html/rfc5280#section-4.1.1.2
-// AlgorithmIdentifier  ::=  SEQUENCE  {
-//      algorithm               OBJECT IDENTIFIER,
-//      parameters              ANY DEFINED BY algorithm OPTIONAL  }
-fn signature_algorithm() -> BerObject<'static> {
-    BerObject::from_seq(vec![
-        // https://datatracker.ietf.org/doc/html/rfc5758.html#section-2
-        // id-sha256  OBJECT IDENTIFIER  ::=  { joint-iso-itu-t(2)
-        //      country(16) us(840) organization(1) gov(101) csor(3)
-        //      nistalgorithm(4) hashalgs(2) 1 }
-        BerObject::from_obj(BerObjectContent::OID(
-            Oid::from(&[2, 16, 840, 1, 101, 3, 4, 2, 1]).unwrap(),
-        )),
-        BerObject::from_obj(BerObjectContent::Null),
-    ])
+#[derive(Clone, Copy)]
+enum HashAlgorithm {
+    Sha1,
+    Sha256,
+}
+
+impl HashAlgorithm {
+    // https://tools.ietf.org/html/rfc5280#section-4.1.1.2
+    // AlgorithmIdentifier  ::=  SEQUENCE  {
+    //      algorithm               OBJECT IDENTIFIER,
+    //      parameters              ANY DEFINED BY algorithm OPTIONAL  }
+    fn to_ber(&self) -> BerObject<'static> {
+        BerObject::from_seq(vec![
+            BerObject::from_obj(BerObjectContent::OID(match self {
+                HashAlgorithm::Sha1 => Oid::from(&[1, 3, 14, 3, 2, 26]).unwrap(),
+                HashAlgorithm::Sha256 => {
+                    // https://datatracker.ietf.org/doc/html/rfc5758.html#section-2
+                    // id-sha256  OBJECT IDENTIFIER  ::=  { joint-iso-itu-t(2)
+                    //      country(16) us(840) organization(1) gov(101) csor(3)
+                    //      nistalgorithm(4) hashalgs(2) 1 }
+                    Oid::from(&[2, 16, 840, 1, 101, 3, 4, 2, 1]).unwrap()
+                }
+            })),
+            BerObject::from_obj(BerObjectContent::Null),
+        ])
+    }
 }
 
 // https://datatracker.ietf.org/doc/html/rfc4325#section-2
@@ -97,6 +121,7 @@ const AIA_OCSP: Oid<'static> = oid!(1.3.6 .1 .5 .5 .7 .48 .1);
 pub async fn fetch_from_ca<'a, F: Fetcher>(
     cert_der: &'a [u8],
     issuer_der: &'a [u8],
+    options: RequestOptions,
     fetcher: F,
 ) -> Result<Vec<u8>> {
     let cert = x509_parser::parse_x509_certificate(cert_der)
@@ -133,7 +158,7 @@ pub async fn fetch_from_ca<'a, F: Fetcher>(
         })
         .ok_or_else(|| anyhow!("AIA OCSP responder with type of URI is not found."))?;
     let req = HttpRequest {
-        body: create_ocsp_request(&cert, &issuer),
+        body: create_ocsp_request(&cert, &issuer, options),
         headers: vec![(
             String::from("content-type"),
             String::from("application/ocsp-request"),

@@ -207,8 +207,15 @@ impl SxgWorker {
         validity.serialize()
     }
     pub async fn fetch_ocsp_from_ca<F: fetcher::Fetcher>(&self, fetcher: F) -> Vec<u8> {
-        let result =
-            ocsp::fetch_from_ca(&self.config.cert_der, &self.config.issuer_der, fetcher).await;
+        let result = ocsp::fetch_from_ca(
+            &self.config.cert_der,
+            &self.config.issuer_der,
+            ocsp::RequestOptions {
+                use_sha1_in_cert_id: self.config.ocsp_use_sha1,
+            },
+            fetcher,
+        )
+        .await;
         // TODO: Remove panic
         result.unwrap()
     }

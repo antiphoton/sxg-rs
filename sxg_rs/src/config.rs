@@ -22,6 +22,10 @@ use std::collections::BTreeSet;
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ConfigInput {
     pub cert_url_dirname: String,
+    /// For most Certificate Authorities, this field should be `false`.
+    /// But some CA (e.g. https://pki.goog/) does not recognize SHA-256 in their
+    /// OCSP server. Hence we have to use SHA1 for such CA.
+    pub ocsp_use_sha1: bool,
     pub forward_request_headers: BTreeSet<String>,
     // This field is only needed by Fastly, because Cloudflare uses [vars]
     // to set this where the TypeScript wrapper can read it.
