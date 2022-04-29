@@ -27,6 +27,7 @@ use der_parser::{
     ber::{BerObject, BerObjectContent},
     oid,
     oid::Oid,
+    parse_ber,
 };
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
@@ -78,6 +79,49 @@ fn create_ocsp_request(cert: &X509Certificate, issuer: &X509Certificate) -> Vec<
     //     optionalSignature   [0]     EXPLICIT Signature OPTIONAL }
     let ocsp_request = BerObject::from_seq(vec![tbs_request]);
     ocsp_request.to_vec().unwrap()
+}
+
+// Validates that the OCSP response contains a succesful status code.
+fn validate_ocsp_response(ocsp_bytes: &[u8]) -> Result<()> {
+    let (remaining_bytes, ocsp_response) = parse_ber(ocsp_bytes)?;
+    if !remaining_bytes.is_empty() {
+        return Err(anyhow!(
+            "OCSP contains {} extra bytes that are not parsed",
+            remaining_bytes.len()
+        ));
+    }
+    // https://datatracker.ietf.org/doc/html/rfc6960#section-4.2.1
+    // OCSPResponse ::= SEQUENCE {
+    //    responseStatus         OCSPResponseStatus,
+    //    responseBytes          [0] EXPLICIT ResponseBytes OPTIONAL }
+    let ocsp_response = ocsp_response
+        .content
+        .as_sequence()
+        .map_err(|e| Error::new(e).context("OCSP response is not a sequence"))?;
+    let response_status = ocsp_response
+        .get(0)
+        .ok_or_else(|| Error::msg("OCSP response does not contain a status as the first item"))?;
+    // https://datatracker.ietf.org/doc/html/rfc6960#section-4.2.1
+    // OCSPResponseStatus ::= ENUMERATED {
+    //     successful            (0),  -- Response has valid confirmations
+    //     malformedRequest      (1),  -- Illegal confirmation request
+    //     internalError         (2),  -- Internal error in issuer
+    //     tryLater              (3),  -- Try again later
+    //                                 -- (4) is not used
+    //     sigRequired           (5),  -- Must sign the request
+    //     unauthorized          (6)   -- Request unauthorized
+    // }
+    if let BerObjectContent::Enum(status) = response_status.content {
+        if status != 0 {
+            return Err(anyhow!(
+                "Expecting OCSP response status to be successful, found {}",
+                status
+            ));
+        }
+    } else {
+        return Err(anyhow!("OCSP response status is not an enum."));
+    }
+    Ok(())
 }
 
 // https://datatracker.ietf.org/doc/html/rfc4325#section-2
@@ -137,7 +181,9 @@ pub async fn fetch_from_ca(
         .fetch(req)
         .await
         .map_err(|e| e.context("Failed to fetch OCSP"))?;
-    Ok(rsp.body)
+    let ocsp_bytes = rsp.body;
+    validate_ocsp_response(&ocsp_bytes)?;
+    Ok(ocsp_bytes)
 }
 
 const OCSP_KEY: &str = "OCSP";
