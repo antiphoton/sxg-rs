@@ -18,8 +18,12 @@ use warp::Filter;
 
 use crate::linux_commands::{create_certificate_request_pem, read_or_create_private_key_pem};
 use crate::runtime::hyper_fetcher::HyperFetcher;
+use serde::{Deserialize, Serialize};
 use sxg_rs::acme::directory::Directory;
 use sxg_rs::acme::eab::create_external_account_binding;
+use sxg_rs::acme::jws::JsonWebSignature;
+use sxg_rs::crypto::{EcPrivateKey, EcPublicKey};
+use sxg_rs::fetcher::Fetcher;
 
 #[derive(Debug, Parser)]
 #[clap(allow_hyphen_values = true)]
@@ -59,10 +63,40 @@ fn start_warp_server(port: u16, answer: String) -> tokio::sync::oneshot::Sender<
     tx
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct EabParams {
+    pub base64_mac_key: String,
+    pub key_id: String,
+}
+
+impl EabParams {
+    pub async fn create_signature(
+        &self,
+        acme_public_key: &EcPublicKey,
+        server_url: &str,
+        fetcher: &dyn Fetcher,
+    ) -> Result<JsonWebSignature> {
+        let mac_key = base64::decode_config(&self.base64_mac_key, base64::URL_SAFE_NO_PAD)?;
+        let eab_signer = crate::runtime::openssl_signer::OpensslSigner::Hmac(&mac_key);
+        let new_account_url = Directory::from_url(server_url, fetcher)
+            .await?
+            .0
+            .new_account;
+        create_external_account_binding(
+            sxg_rs::acme::jws::Algorithm::HS256,
+            &self.key_id,
+            &new_account_url,
+            &acme_public_key,
+            &eab_signer,
+        )
+        .await
+    }
+}
+
 pub async fn main(opts: Opts) -> Result<()> {
     let acme_private_key = {
         let private_key_pem = read_or_create_private_key_pem(&opts.acme_account_private_key_file)?;
-        sxg_rs::crypto::EcPrivateKey::from_sec1_pem(&private_key_pem)?
+        EcPrivateKey::from_sec1_pem(&private_key_pem)?
     };
     let sxg_cert_request_der = {
         read_or_create_private_key_pem(&opts.sxg_private_key_file)?;
@@ -78,23 +112,21 @@ pub async fn main(opts: Opts) -> Result<()> {
         fetcher: Box::new(HyperFetcher::new()),
         ..Default::default()
     };
-    let external_account_binding = match (&opts.eab_key_id, &opts.eab_mac_key) {
+    let external_account_binding = match (opts.eab_key_id, opts.eab_mac_key) {
         (Some(eab_key_id), Some(eab_mac_key)) => {
-            let eab_mac_key = base64::decode_config(eab_mac_key, base64::URL_SAFE_NO_PAD)?;
-            let eab_signer = crate::runtime::openssl_signer::OpensslSigner::Hmac(&eab_mac_key);
-            let new_account_url = Directory::from_url(&opts.acme_server, runtime.fetcher.as_ref())
-                .await?
-                .0
-                .new_account;
-            let eab = create_external_account_binding(
-                sxg_rs::acme::jws::Algorithm::HS256,
-                eab_key_id,
-                &new_account_url,
-                &acme_private_key.public_key,
-                &eab_signer,
+            let eab_params = EabParams {
+                base64_mac_key: eab_mac_key,
+                key_id: eab_key_id,
+            };
+            Some(
+                eab_params
+                    .create_signature(
+                        &acme_private_key.public_key,
+                        &opts.acme_server,
+                        runtime.fetcher.as_ref(),
+                    )
+                    .await?,
             )
-            .await?;
-            Some(eab)
         }
         (None, None) => None,
         _ => {
