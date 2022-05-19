@@ -256,6 +256,16 @@ impl SxgWorker {
         let path = req_url.path();
         if let Some(basename) = path.strip_prefix(&self.config.reserved_path) {
             match basename {
+                "acme-state.txt" => {
+                    let state = crate::acme::state_machine::read_current_state(runtime)
+                        .await
+                        .unwrap();
+                    Some(PresetContent::Direct(HttpResponse {
+                        headers: vec![(String::from("content-type"), String::from("text/plain"))],
+                        status: 200,
+                        body: format!("{:#?}", state).into_bytes(),
+                    }))
+                }
                 "test.html" => Some(PresetContent::Direct(HttpResponse {
                     headers: vec![(String::from("content-type"), String::from("text/html"))],
                     status: 200,
