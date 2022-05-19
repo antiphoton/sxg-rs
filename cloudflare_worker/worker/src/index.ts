@@ -140,6 +140,11 @@ async function updateStateMachine() {
 
 async function handleRequest(request: Request) {
   const worker = await workerPromise;
+  if (request.method === 'POST') {
+    if (request.url.includes('sxg-rs-update-acme-state-machine')) {
+      await worker.updateAcmeStateMachine(createRuntime(), ACME_ACCOUNT);
+    }
+  }
   let sxgPayload: Response | undefined;
   let fallback: Response | undefined;
   let response: Response | undefined;
