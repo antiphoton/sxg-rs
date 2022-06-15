@@ -199,6 +199,7 @@ async fn update_state_impl(
 }
 
 pub async fn update_state(runtime: &Runtime, account: &Account) -> Result<()> {
+    crate::utils::console_dbg!(123);
     let mut old_state = read_current_state(runtime).await?;
     let mut new_state = old_state.clone();
     let result = update_state_impl(
@@ -217,6 +218,7 @@ pub async fn update_state(runtime: &Runtime, account: &Account) -> Result<()> {
             Ok(())
         }
         Err(e) => {
+            crate::utils::console_dbg!(&e);
             // In case any error occured, we use the old state,
             // and double the wait time for next update.
             if let Some(task) = &mut old_state.task {

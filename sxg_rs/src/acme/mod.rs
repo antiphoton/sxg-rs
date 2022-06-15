@@ -216,16 +216,20 @@ pub async fn check_challenge_finished(
     fetcher: &dyn Fetcher,
     acme_signer: &dyn Signer,
 ) -> Result<bool> {
+    crate::utils::console_dbg!(());
     let (directory, nonce) = Directory::from_url(&account.server_directory_url, fetcher).await?;
+    crate::utils::console_dbg!(());
     let mut client = Client::new(
         &directory,
         AuthMethod::KeyId(account.account_url.clone()),
         nonce,
     );
+    crate::utils::console_dbg!(());
     let challenge =
         get_http_challenge(&mut client, authorization_url, fetcher, acme_signer).await?;
     // The status of a challenge object is defined in
     // https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.6
+    crate::utils::console_dbg!(&challenge);
     match challenge.status {
         Status::Valid => Ok(true),
         Status::Pending | Status::Processing => Ok(false),
@@ -328,15 +332,19 @@ async fn get_http_challenge(
     fetcher: &dyn Fetcher,
     acme_signer: &dyn Signer,
 ) -> Result<Challenge> {
+    crate::utils::console_dbg!(());
     let response = client
         .post_as_get(authorization_url.to_string(), fetcher, acme_signer)
         .await?;
+    crate::utils::console_dbg!(&response);
     let authorization: Authorization = parse_response_body(&response)?;
+    crate::utils::console_dbg!(&authorization);
     let challenge: &Challenge = authorization
         .challenges
         .iter()
         .find(|challenge| challenge.r#type == "http-01")
         .ok_or_else(|| Error::msg("The authorization does not have http-01 type challenge"))?;
+    crate::utils::console_dbg!(&challenge);
     Ok((*challenge).clone())
 }
 
