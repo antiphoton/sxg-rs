@@ -29,7 +29,7 @@ pub mod state_machine;
 use crate::crypto::EcPublicKey;
 use crate::fetcher::Fetcher;
 use crate::signature::Signer;
-use anyhow::{anyhow, Error, Result};
+use anyhow::{anyhow, ensure, Error, Result};
 use client::{parse_response_body, AuthMethod, Client};
 use directory::{
     Authorization, Challenge, Directory, FinalizeRequest, Identifier, IdentifierType,
@@ -164,6 +164,7 @@ pub async fn place_new_order(
             .map_err(|e| e.context("Failed to get order URL"))?;
         (order, order_url)
     };
+    dbg!(&order_url);
     let authorization_url: String = order
         .authorizations
         .get(0)
@@ -258,7 +259,8 @@ async fn finalize_signing_request(
         AuthMethod::KeyId(account.account_url.clone()),
         nonce,
     );
-    client
+
+    let response = client
         .post_with_payload(
             finalize_url.clone(),
             FinalizeRequest {
@@ -268,6 +270,12 @@ async fn finalize_signing_request(
             acme_signer,
         )
         .await?;
+    
+    if response.status != 200 {
+        dbg!(response);
+        return Err(anyhow!("Failed to finalize signing request"));
+    }
+        
     Ok(())
 }
 
@@ -289,6 +297,7 @@ async fn get_certificate_url(
         .post_as_get(order_url.clone(), fetcher, acme_signer)
         .await?;
     let order: Order = parse_response_body(&response)?;
+    dbg!(&order);
     match order.status {
         Status::Pending | Status::Processing => Ok(None),
         Status::Valid => {
@@ -296,6 +305,10 @@ async fn get_certificate_url(
                 anyhow!("The order status is Valid, but there is no certificate URL")
             })?;
             Ok(Some(certificate_url))
+        }
+        Status::Ready => {
+            // DO NOT SUBMIT
+            Ok(None)
         }
         _ => Err(anyhow!(
             "This code is unreachable, \
@@ -336,9 +349,9 @@ async fn get_http_challenge(
     let response = client
         .post_as_get(authorization_url.to_string(), fetcher, acme_signer)
         .await?;
-    crate::utils::console_dbg!(&response);
+    // crate::utils::console_dbg!(&response);
     let authorization: Authorization = parse_response_body(&response)?;
-    crate::utils::console_dbg!(&authorization);
+    // crate::utils::console_dbg!(&authorization);
     let challenge: &Challenge = authorization
         .challenges
         .iter()

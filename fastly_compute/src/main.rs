@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod fetcher;
+mod storage;
 
 use anyhow::{Error, Result};
 use fastly::{
@@ -21,25 +22,14 @@ use fastly::{
     Request, Response,
 };
 use fetcher::FastlyFetcher;
-use once_cell::sync::Lazy;
 use std::convert::TryInto;
 use sxg_rs::{
     crypto::CertificateChain,
     headers::{AcceptFilter, Headers},
     http::HeaderFields,
     PresetContent,
+    SxgWorker,
 };
-
-pub static WORKER: Lazy<::sxg_rs::SxgWorker> = Lazy::new(|| {
-    let mut worker = ::sxg_rs::SxgWorker::new(include_str!("../config.yaml")).unwrap();
-    let certificate = CertificateChain::from_pem_files(&[
-        include_str!("../../credentials/cert.pem"),
-        include_str!("../../credentials/issuer.pem"),
-    ])
-    .unwrap();
-    worker.add_certificate(certificate);
-    worker
-});
 
 fn binary_response(status_code: StatusCode, content_type: Mime, body: &[u8]) -> Response {
     let mut response = Response::new();
@@ -53,7 +43,7 @@ fn text_response(body: &str) -> Response {
     binary_response(StatusCode::OK, fastly::mime::TEXT_PLAIN, body.as_bytes())
 }
 
-fn get_req_header_fields(req: &Request, accept_filter: AcceptFilter) -> Result<HeaderFields> {
+async fn get_req_header_fields(worker: &SxgWorker, req: &Request, accept_filter: AcceptFilter) -> Result<HeaderFields> {
     let mut fields: Vec<(String, String)> = vec![];
     for name in req.get_header_names() {
         for value in req.get_header_all(name) {
@@ -63,10 +53,10 @@ fn get_req_header_fields(req: &Request, accept_filter: AcceptFilter) -> Result<H
             fields.push((name.as_str().to_string(), value.to_string()))
         }
     }
-    WORKER.transform_request_headers(fields, accept_filter)
+    worker.transform_request_headers(fields, accept_filter)
 }
 
-fn get_rsp_header_fields(rsp: &Response) -> Result<Headers> {
+async fn get_rsp_header_fields(worker: &SxgWorker, rsp: &Response) -> Result<Headers> {
     let mut fields: Vec<(String, String)> = vec![];
     for name in rsp.get_header_names() {
         for value in rsp.get_header_all(name) {
@@ -76,7 +66,7 @@ fn get_rsp_header_fields(rsp: &Response) -> Result<Headers> {
             fields.push((name.as_str().to_string(), value.to_string()))
         }
     }
-    WORKER.transform_payload_headers(fields)
+    worker.transform_payload_headers(fields)
 }
 
 pub fn sxg_rs_response_to_fastly_response(
@@ -96,17 +86,21 @@ fn fetch_from_html_server(url: &Url, req_headers: Vec<(String, String)>) -> Resu
         .map_err(|err| Error::msg(format!(r#"Fetching "{}" leads to error "{}""#, url, err)))
 }
 
-async fn generate_sxg_response(fallback_url: &Url, payload: Response) -> Result<Response> {
-    let payload_headers = get_rsp_header_fields(&payload)?;
+async fn generate_sxg_response(worker: &SxgWorker, fallback_url: &Url, payload: Response) -> Result<Response> {
+    let payload_headers = get_rsp_header_fields(worker, &payload).await?;
     let payload_body = payload.into_body_bytes();
     let cert_origin = fallback_url.origin().ascii_serialization();
     let runtime = sxg_rs::runtime::Runtime {
         now: std::time::SystemTime::now(),
-        sxg_signer: Box::new(WORKER.create_rust_signer()?),
         fetcher: Box::new(FastlyFetcher::new("subresources")),
+        storage: Box::new(storage::FastlyStorage::new("config")),
+        sxg_signer: Box::new(worker.create_rust_signer().unwrap()),
         ..Default::default()
     };
-    let sxg = WORKER.create_signed_exchange(
+    let mut fallback_url = fallback_url.clone();
+    // DO NOT SUBMIT
+    fallback_url.set_host(Some("fastly-backend.caoboxiao.com")).unwrap();
+    let sxg = worker.create_signed_exchange(
         &runtime,
         sxg_rs::CreateSignedExchangeParams {
             payload_body: &payload_body,
@@ -125,18 +119,29 @@ async fn generate_sxg_response(fallback_url: &Url, payload: Response) -> Result<
     sxg_rs_response_to_fastly_response(sxg)
 }
 
-async fn handle_request(req: Request) -> Result<Response> {
+async fn handle_request(worker: &SxgWorker, req: Request) -> Result<Response> {
+    let response = fastly::Response::from_body("asdfa");
     let runtime = sxg_rs::runtime::Runtime {
         now: std::time::SystemTime::now(),
-        sxg_signer: Box::new(WORKER.create_rust_signer()?),
         fetcher: Box::new(FastlyFetcher::new("OCSP server")),
+        storage: Box::new(storage::FastlyStorage::new("config")),
         ..Default::default()
     };
     let fallback_url: Url;
     let sxg_payload;
-    let preset_content = WORKER
+    let mut preset_content = worker
         .serve_preset_content(&runtime, req.get_url_str())
         .await;
+    if false && req.get_url_str().contains("test-fastly") {
+        let dict = fastly::ConfigStore::open("config");
+        let value = dict.get("sxg-config-input");
+        preset_content = Some(PresetContent::Direct(sxg_rs::http::HttpResponse {
+            headers: vec![("content-type".to_string(), "text/plain".to_string())],
+            status: 200,
+            body: format!("{:#?}", value).to_string().into_bytes(),
+        }));
+    }
+    dbg!(&preset_content);
     match preset_content {
         Some(PresetContent::Direct(response)) => {
             return sxg_rs_response_to_fastly_response(response)
@@ -144,24 +149,43 @@ async fn handle_request(req: Request) -> Result<Response> {
         Some(PresetContent::ToBeSigned { url, payload, .. }) => {
             fallback_url = Url::parse(&url).map_err(Error::new)?;
             sxg_payload = sxg_rs_response_to_fastly_response(payload)?;
-            get_req_header_fields(&req, AcceptFilter::AcceptsSxg)?;
+            get_req_header_fields(worker, &req, AcceptFilter::AcceptsSxg).await?;
         }
         None => {
-            fallback_url = WORKER.get_fallback_url(req.get_url())?;
-            let req_headers = get_req_header_fields(&req, AcceptFilter::PrefersSxg)?;
+            fallback_url = worker.get_fallback_url(req.get_url())?;
+            let req_headers = get_req_header_fields(worker, &req, AcceptFilter::PrefersSxg).await?;
             sxg_payload = fetch_from_html_server(&fallback_url, req_headers)?;
         }
     };
-    generate_sxg_response(&fallback_url, sxg_payload).await
+    if 2 > 3 {
+        return Ok(response);
+    }
+    generate_sxg_response(worker, &fallback_url, sxg_payload).await
 }
 
 #[fastly::main]
 fn main(req: Request) -> Result<Response, std::convert::Infallible> {
+    dbg!();
+    if 2 > 3 {
+        let response = fastly::Response::from_body("asdf");
+        return Ok(response);
+    }
     tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap()
         .block_on(async {
-            let response = handle_request(req).await.unwrap_or_else(|msg| {
+            let dict = fastly::ConfigStore::open("config");
+            let mut worker = ::sxg_rs::SxgWorker::new(&dict.get("sxg-config-input").unwrap()).unwrap();
+            if let (Some(cert_pem), Some(issuer_pem)) = (dict.get("cert-pem"), dict.get("issuer-pem")) {
+                let certificate = CertificateChain::from_pem_files(&[&cert_pem, &issuer_pem]).unwrap();
+                worker.add_certificate(certificate);
+            }
+            let runtime = sxg_rs::runtime::Runtime {
+                storage: Box::new(storage::FastlyStorage::new("config")),
+                ..Default::default()
+            };
+            worker.add_acme_certificates_from_storage(&runtime).await.unwrap();
+            let response = handle_request(&worker, req).await.unwrap_or_else(|msg| {
                 text_response(&format!("A message is gracefully thrown.\n{:?}", msg))
             });
             Ok(response)
@@ -169,10 +193,4 @@ fn main(req: Request) -> Result<Response, std::convert::Infallible> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn it_works() {
-        WORKER.create_rust_signer().unwrap();
-    }
-}
+mod tests {}

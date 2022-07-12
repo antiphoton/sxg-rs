@@ -16,9 +16,9 @@ use super::gen_config::read_artifact;
 use crate::runtime::hyper_fetcher::HyperFetcher;
 use anyhow::Result;
 use clap::Parser;
-use sxg_rs::acme::state_machine::{
+use sxg_rs::{acme::state_machine::{
     get_challenge_token_and_answer, update_state as update_acme_state_machine,
-};
+}, fetcher::Fetcher};
 use warp::Filter;
 
 #[derive(Debug, Parser)]
@@ -28,6 +28,9 @@ pub struct Opts {
     port: Option<u16>,
     #[clap(long)]
     artifact: String,
+    // DO NOT SUBMIT
+    #[clap(long)]
+    use_fastly_dictionary: bool,
 }
 
 fn start_warp_server(port: u16, answer: String) -> tokio::sync::oneshot::Sender<()> {
@@ -55,7 +58,9 @@ pub async fn main(opts: Opts) -> Result<()> {
         fetcher: Box::new(HyperFetcher::new()),
         ..Default::default()
     };
+    dbg!();
     let (challenge_token, challenge_answer) = loop {
+        dbg!();
         runtime.now = std::time::SystemTime::now();
         update_acme_state_machine(&runtime, &acme_account).await?;
         if let Some((token, answer)) = get_challenge_token_and_answer(&runtime).await? {
@@ -63,8 +68,34 @@ pub async fn main(opts: Opts) -> Result<()> {
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     };
+    dbg!();
+
     let graceful_shutdown = if let Some(port) = opts.port {
         Some(start_warp_server(port, challenge_answer))
+    } else if opts.use_fastly_dictionary {
+        dbg!(&challenge_token, &challenge_answer);
+        let acme_state =
+            sxg_rs::acme::state_machine::create_from_challenge(&challenge_token, challenge_answer);
+        super::gen_config::fastly::update_dictionary_item(
+            artifact.fastly_service_id.as_ref().unwrap(),
+            artifact.fastly_dictionary_id.as_ref().unwrap(),
+            sxg_rs::acme::state_machine::ACME_STORAGE_KEY,
+            &serde_json::to_string(&acme_state)?,
+        )?;
+        loop {
+            let domain = "fastly-backend.caoboxiao.com";
+            let url = format!("http://{}/.well-known/acme-challenge/{}", domain, challenge_token);
+            dbg!(&url);
+            break;
+            let x = sxg_rs::fetcher::get(runtime.fetcher.as_ref(),&url).await?;
+            dbg!(x);
+        }
+        dbg!();
+        wait_enter_key();
+        if 2 > 3 {
+            std::process::exit(0);
+        }
+        None
     } else {
         println!(
             "\
@@ -89,9 +120,19 @@ pub async fn main(opts: Opts) -> Result<()> {
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     };
+    if opts.use_fastly_dictionary {
+        let acme_state = sxg_rs::acme::state_machine::create_from_certificate(certificate_pem);
+        super::gen_config::fastly::update_dictionary_item(
+            artifact.fastly_service_id.as_ref().unwrap(),
+            artifact.fastly_dictionary_id.as_ref().unwrap(),
+            sxg_rs::acme::state_machine::ACME_STORAGE_KEY,
+            &serde_json::to_string(&acme_state)?,
+        )?;
+    } else {
+        println!("{}", certificate_pem);
+    }
     if let Some(tx) = graceful_shutdown {
         let _ = tx.send(());
     }
-    println!("{}", certificate_pem);
     Ok(())
 }

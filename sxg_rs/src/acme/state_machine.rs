@@ -22,7 +22,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
 
-const ACME_STORAGE_KEY: &str = "ACME";
+pub const ACME_STORAGE_KEY: &str = "ACME";
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AcmeStorageData {
@@ -37,7 +37,7 @@ pub struct Task {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct Schedule {
+pub struct Schedule {
     updated_at: SystemTime,
     wait_time: Duration,
     next_step: TaskStep,
@@ -56,7 +56,7 @@ impl Schedule {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-enum TaskStep {
+pub enum TaskStep {
     RequestChallengeValidation,
     CheckChallengeFinished,
     FinalizeSigningRequest,
@@ -93,8 +93,8 @@ async fn write_state(runtime: &Runtime, state: &AcmeStorageData) -> Result<()> {
     Ok(())
 }
 
-const MIN_SLEEP: Duration = Duration::from_secs(59);
-const MAX_SLEEP: Duration = Duration::from_secs(600);
+const MIN_SLEEP: Duration = Duration::from_secs(5);
+const MAX_SLEEP: Duration = Duration::from_secs(10);
 
 // Parses the certificate chain PEM, and returns the expiration time of the first certificate.
 fn get_certificate_expiration_time(certificate_pem: &str) -> Result<SystemTime> {
@@ -111,6 +111,7 @@ async fn update_state_impl(
     fetcher: &dyn Fetcher,
     acme_signer: &dyn Signer,
 ) -> Result<()> {
+    dbg!(&state);
     if let Some(certificate_pem) = state.certificates.last() {
         let expiration = get_certificate_expiration_time(certificate_pem)?;
         const TEN_DAYS: Duration = Duration::from_secs(3600 * 24 * 10);
@@ -125,6 +126,7 @@ async fn update_state_impl(
             // We do nothing before the scheduled wait time has passed.
             return Ok(());
         }
+        dbg!(&task);
         match &task.schedule.next_step {
             TaskStep::RequestChallengeValidation => {
                 super::request_challenge_validation(
@@ -144,6 +146,7 @@ async fn update_state_impl(
                     acme_signer,
                 )
                 .await?;
+                dbg!(is_finished);
                 if is_finished {
                     task.schedule.reset(now, TaskStep::FinalizeSigningRequest);
                 } else {
@@ -151,7 +154,7 @@ async fn update_state_impl(
                 }
             }
             TaskStep::FinalizeSigningRequest => {
-                super::finalize_signing_request(
+                let r = super::finalize_signing_request(
                     account,
                     task.order.finalize_url.clone(),
                     fetcher,
@@ -199,7 +202,6 @@ async fn update_state_impl(
 }
 
 pub async fn update_state(runtime: &Runtime, account: &Account) -> Result<()> {
-    crate::utils::console_dbg!(123);
     let mut old_state = read_current_state(runtime).await?;
     let mut new_state = old_state.clone();
     let result = update_state_impl(
@@ -232,6 +234,7 @@ pub async fn update_state(runtime: &Runtime, account: &Account) -> Result<()> {
 
 pub async fn get_challenge_token_and_answer(runtime: &Runtime) -> Result<Option<(String, String)>> {
     let state = read_current_state(runtime).await?;
+    dbg!();
     if let Some(task) = state.task {
         Ok(Some((
             task.order.challenge_token,
@@ -240,6 +243,32 @@ pub async fn get_challenge_token_and_answer(runtime: &Runtime) -> Result<Option<
     } else {
         Ok(None)
     }
+}
+
+pub fn create_from_challenge(challenge_token: impl ToString, challenge_answer: impl ToString) -> AcmeStorageData {
+    AcmeStorageData {
+        certificates: vec![],
+        task: Some(Task {
+            order: OngoingOrder {
+                challenge_token: challenge_token.to_string(),
+                challenge_answer: challenge_answer.to_string(),
+                authorization_url: String::new(),
+                certificate_url: None,
+                challenge_url: String::new(),
+                finalize_url: String::new(),
+                order_url: String::new(),
+            },
+            schedule: Schedule {
+                updated_at: SystemTime::UNIX_EPOCH,
+                wait_time: Duration::ZERO,
+                next_step: TaskStep::RequestChallengeValidation,
+            },
+        }),
+    }
+}
+
+pub fn create_from_certificate(certificate_pem: impl ToString) -> AcmeStorageData {
+    AcmeStorageData { certificates: vec![certificate_pem.to_string()], task: None }
 }
 
 #[cfg(test)]

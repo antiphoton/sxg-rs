@@ -309,8 +309,18 @@ impl SxgWorker {
                 _ => None,
             }
         } else if let Some(cert_name) = path.strip_prefix(&self.config.cert_url_dirname) {
+            dbg!(&cert_name);
+            dbg!(&self.certificates.len());
+            for x in self.certificates.iter() {
+                dbg!(&x.basename);
+                dbg!(base64::encode(&x.end_entity.der));
+            }
             if let Some(certificate) = self.find_certificate_by_basename(cert_name) {
-                let ocsp_der = self.get_unexpired_ocsp(runtime).await.ok()?;
+                dbg!(&certificate.basename);
+                let ocsp_der = self.get_unexpired_ocsp(runtime).await.ok();
+                dbg!(&ocsp_der);
+                let ocsp_der = ocsp_der?;
+                dbg!(base64::encode(&ocsp_der));
                 Some(PresetContent::Direct(HttpResponse {
                     body: certificate.create_cert_cbor(&ocsp_der),
                     headers: vec![(
@@ -344,6 +354,29 @@ impl SxgWorker {
                 }))
             }
         } else if let Some(actual_token) = path.strip_prefix("/.well-known/acme-challenge/") {
+            if actual_token.starts_with("a111") {
+                return Some(PresetContent::Direct(HttpResponse {
+                    body: format!("actual {}", actual_token).into_bytes(),
+                    headers: vec![(String::from("content-type"), String::from("text/plain"))],
+                    status: 200,
+                }));
+            }
+            if actual_token.starts_with("b111") {
+                let x = crate::acme::state_machine::read_current_state(runtime).await;
+                return Some(PresetContent::Direct(HttpResponse {
+                    body: format!("{:#?}", x).into_bytes(),
+                    headers: vec![(String::from("content-type"), String::from("text/plain"))],
+                    status: 200,
+                }));
+            }
+            if actual_token.starts_with("b222") {
+                let x = runtime.storage.read("ACME").await;
+                return Some(PresetContent::Direct(HttpResponse {
+                    body: format!("{:#?}", x).into_bytes(),
+                    headers: vec![(String::from("content-type"), String::from("text/plain"))],
+                    status: 200,
+                }));
+            }
             match crate::acme::state_machine::get_challenge_token_and_answer(runtime).await {
                 Ok(Some((expected_token, answer))) => {
                     if actual_token == expected_token {

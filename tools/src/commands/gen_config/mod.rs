@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod cloudflare;
+pub mod fastly;
 
 use crate::linux_commands::generate_private_key_pem;
 use crate::runtime::openssl_signer::OpensslSigner;
@@ -20,14 +21,16 @@ use crate::tokio_block_on;
 use anyhow::{Error, Result};
 use clap::{ArgEnum, Parser};
 use cloudflare::CloudlareSpecificInput;
+use fastly::FastlySpecificInput;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use sxg_rs::acme::{directory::Directory as AcmeDirectory, Account as AcmeAccount};
 use sxg_rs::crypto::EcPrivateKey;
 
 #[derive(ArgEnum, Clone, Debug, Eq, PartialEq)]
-enum Platform {
+pub enum Platform {
     Cloudflare,
+    Fastly,
 }
 
 #[derive(Debug, Parser)]
@@ -52,6 +55,7 @@ pub struct Config {
     sxg_worker: sxg_rs::config::Config,
     certificates: SxgCertConfig,
     cloudflare: Option<CloudlareSpecificInput>,
+    fastly: Option<FastlySpecificInput>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -85,6 +89,8 @@ pub struct Artifact {
     pub acme_private_key: Option<EcPrivateKey>,
     pub acme_private_key_instructions: BTreeMap<String, String>,
     pub cloudflare_kv_namespace_id: Option<String>,
+    pub fastly_service_id: Option<String>,
+    pub fastly_dictionary_id: Option<String>,
 }
 
 // Set working directory to the root folder of the "sxg-rs" repository.
@@ -211,6 +217,17 @@ pub fn main(opts: Opts) -> Result<()> {
                 &input
                     .cloudflare
                     .expect(r#"Input file does not contain "cloudflare" section."#),
+                &mut artifact,
+            )?;
+        }
+        Some(Platform::Fastly) => {
+            fastly::main(
+                opts.use_ci_mode,
+                &input.sxg_worker,
+                &input.certificates,
+                &input
+                    .fastly
+                    .expect(r#"Input file does not contain "fastly" section."#),
                 &mut artifact,
             )?;
         }

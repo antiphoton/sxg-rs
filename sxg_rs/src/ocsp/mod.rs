@@ -168,6 +168,7 @@ pub async fn fetch_from_ca(
             }
         })
         .ok_or_else(|| anyhow!("AIA OCSP responder with type of URI is not found."))?;
+    dbg!(url);
     let req = HttpRequest {
         body: create_ocsp_request(&cert, &issuer),
         headers: vec![(
@@ -210,6 +211,7 @@ pub async fn read_and_update_ocsp_in_storage(
     runtime: &Runtime,
     strategy: OcspUpdateStrategy,
 ) -> Result<Vec<u8>> {
+    dbg!();
     // Checks whether we can directly return the existing OCSP in storage.
     if let Some(old_ocsp) = runtime.storage.read(OCSP_KEY).await? {
         if let Ok(old_ocsp) = serde_json::from_str::<OcspData>(&old_ocsp) {
@@ -226,12 +228,15 @@ pub async fn read_and_update_ocsp_in_storage(
                 }
             }
         } else {
+            dbg!();
             // The existing OCSP in storage can't be parsed as `OcspData`.
         }
     } else {
+        dbg!();
         // There is no OCSP in storage.
     }
     if certificate_chain.issuers.is_empty() {
+        dbg!();
         return Err(Error::msg("Certiciate chain contains no issuer."));
     }
     let cert_der = &certificate_chain.end_entity.der;
@@ -239,7 +244,9 @@ pub async fn read_and_update_ocsp_in_storage(
     let new_ocsp_value = {
         static SINGLE_TASK: Mutex<()> = Mutex::const_new(());
         let guard = SINGLE_TASK.lock().await;
+        dbg!();
         let ocsp = fetch_from_ca(cert_der, issuer_der, runtime.fetcher.as_ref()).await?;
+        dbg!();
         std::mem::drop(guard);
         ocsp
     };
@@ -250,9 +257,14 @@ pub async fn read_and_update_ocsp_in_storage(
         recommended_update_time: runtime.now + ONE_DAY,
         value: new_ocsp_value,
     };
-    runtime
+    dbg!();
+    let write_result = runtime
         .storage
         .write(OCSP_KEY, &serde_json::to_string(&new_ocsp)?)
-        .await?;
+        .await;
+    dbg!();
+    if write_result.is_err() {
+        dbg!("Failed to write");
+    }
     Ok(new_ocsp.value)
 }

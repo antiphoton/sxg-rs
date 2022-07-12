@@ -26,23 +26,18 @@ use async_trait::async_trait;
 #[cfg_attr(not(feature = "wasm"), async_trait)]
 pub trait Fetcher: MaybeSend + MaybeSync {
     async fn fetch(&self, request: HttpRequest) -> Result<HttpResponse>;
-    /// Uses `Get` method and returns response body.
-    // `where Self: Sized` is because of
-    // https://github.com/rust-lang/rust/issues/51443 and in particular
-    // https://docs.rs/async-trait/0.1.36/async_trait/#dyn-traits.
-    async fn get(&self, url: &str) -> Result<Vec<u8>>
-    where
-        Self: Sized,
-    {
-        let request = HttpRequest {
-            body: vec![],
-            headers: vec![],
-            method: crate::http::Method::Get,
-            url: url.to_string(),
-        };
-        let response = self.fetch(request).await?;
-        Ok(response.body)
-    }
+}
+
+/// Uses `Get` method and returns response body.
+pub async fn get(fetcher: &dyn Fetcher, url: &str) -> Result<Vec<u8>> {
+    let request = HttpRequest {
+        body: vec![],
+        headers: vec![],
+        method: crate::http::Method::Get,
+        url: url.to_string(),
+    };
+    let response = fetcher.fetch(request).await?;
+    Ok(response.body)
 }
 
 pub const NULL_FETCHER: NullFetcher = NullFetcher {};
